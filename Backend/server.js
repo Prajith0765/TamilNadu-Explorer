@@ -3,22 +3,31 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const authRoutes = require('./routes/auth');
 const placesRoutes = require('./routes/places');
+require('dotenv').config(); // Load .env file
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-// Use MongoDB Atlas connection string
-mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/tamilnadu_explorer', {
+// Connect to MongoDB
+mongoose.connect(process.env.MONGO_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
-  
 }).then(() => console.log('MongoDB Connected'))
-  .catch((err) => console.error('MongoDB connection error:', err));
+  .catch((err) => {
+    console.error('MongoDB connection error:', err);
+    process.exit(1); // Exit if connection fails
+  });
 
 app.use('/api/auth', authRoutes);
 app.use('/api/places', placesRoutes);
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Server error:', err.stack);
+  res.status(500).json({ message: 'Internal server error' });
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
