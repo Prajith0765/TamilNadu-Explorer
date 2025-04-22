@@ -12,84 +12,120 @@ const Home = () => {
   const [error, setError] = useState('');
   const isAuthenticated = !!localStorage.getItem('token');
 
+  // Fetch places on mount or when location changes
   useEffect(() => {
+    const fetchPlaces = async (loc = null) => {
+      setLoading(true);
+      setError('');
+      try {
+        // Build Geoapify API URL with valid categories
+        let url = `https://api.geoapify.com/v2/places?categories=tourism.attraction,beach,natural&limit=20&apiKey=${import.meta.env.VITE_GEOAPIFY_API_KEY}`;
+        if (loc) {
+          url += `&filter=circle:${loc.lon},${loc.lat},50000`; // 50km radius
+        } else {
+          // Tamil Nadu bounding box: lonMin,latMin,lonMax,latMax
+          url += '&filter=rect:76.0,8.0,80.3,13.5';
+        }
+        console.log('Fetching places from:', url);
+        const response = await axios.get(url);
+        console.log('Geoapify response:', response.data);
+
+        const fetchedPlaces = response.data.features.map((feature) => ({
+          id: feature.properties.place_id || feature.properties.datasource?.raw?.place_id || 'unknown',
+          name: feature.properties.name || 'Unknown Place',
+          description: feature.properties.address_line2 || 'A beautiful destination',
+          coordinates: {
+            lon: feature.properties.lon,
+            lat: feature.properties.lat,
+          },
+          tags: feature.properties.categories || [],
+          address: feature.properties.formatted || 'No address available',
+          imageUrl: `https://source.unsplash.com/featured/?${encodeURIComponent(feature.properties.name || 'tourism')},tamilnadu`,
+        }));
+
+        setPlaces(fetchedPlaces);
+        if (fetchedPlaces.length === 0) {
+          setError('No places found in this area. Try searching for a specific place like "Marina Beach".');
+        }
+      } catch (err) {
+        console.error('Fetch places error:', err.response || err.message);
+        if (err.response?.status === 400) {
+          setError(`Invalid API request: ${err.response.data?.message || 'Check query parameters.'}`);
+        } else {
+          setError('Failed to fetch places. Please check your API key or network.');
+        }
+      }
+      setLoading(false);
+    };
+
+    // Try geolocation, fallback to Tamil Nadu if it fails
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          setLocation({
+          const loc = {
             lat: position.coords.latitude,
             lon: position.coords.longitude,
-          });
+          };
+          setLocation(loc);
+          fetchPlaces(loc);
         },
         () => {
-          setError('Unable to get location. Showing default places.');
-          fetchPlaces();
-        }
+          console.log('Geolocation failed, using Tamil Nadu default');
+          fetchPlaces(); // Tamil Nadu-wide
+        },
+        { timeout: 5000 }
       );
     } else {
-      setError('Geolocation not supported. Showing default places.');
-      fetchPlaces();
+      console.log('Geolocation not supported, using Tamil Nadu default');
+      fetchPlaces(); // Tamil Nadu-wide
     }
   }, []);
 
-  useEffect(() => {
-    if (location) {
-      fetchPlaces(location);
-    }
-  }, [location]);
-
-  const fetchPlaces = async (loc = null) => {
-    setLoading(true);
-    try {
-      let url = `https://api.geoapify.com/v2/places?categories=tourism&limit=20&apiKey=${import.meta.env.VITE_GEOAPIFY_API_KEY}`;
-      if (loc) {
-        url += `&filter=circle:${loc.lon},${loc.lat},10000`;
-      } else {
-        url += '&filter=circle:80.2707,13.0827,10000'; // Default: Chennai
-      }
-      const response = await axios.get(url);
-      const fetchedPlaces = response.data.features.map((feature) => ({
-        id: feature.properties.place_id,
-        name: feature.properties.name || 'Unknown Place',
-        description: feature.properties.address_line2 || 'A beautiful destination',
-        coordinates: feature.properties,
-        tags: feature.properties.categories || [],
-        address: feature.properties.formatted || 'No address available',
-        imageUrl: `https://source.unsplash.com/featured/?${encodeURIComponent(feature.properties.name || 'tourism')},tamilnadu`,
-      }));
-      setPlaces(fetchedPlaces);
-    } catch (err) {
-      setError('Failed to fetch places.');
-      console.error('Fetch places error:', err);
-    }
-    setLoading(false);
-  };
-
+  // Search places
   const handleSearch = async (e) => {
     e.preventDefault();
-    if (!searchQuery.trim()) return;
+    if (!searchQuery.trim()) {
+      setError('Please enter a search term.');
+      return;
+    }
     setLoading(true);
+    setError('');
     try {
+      // Search across Tamil Nadu with valid categories
       const response = await axios.get(
-        `https://api.geoapify.com/v2/places?categories=tourism&conditions=named&filter=place:51a69e94d17e6551c0590d833423e9a5e135c0f029db9e52&limit=20&apiKey=${import.meta.env.VITE_GEOAPIFY_API_KEY}`
+        `https://api.geoapify.com/v2/places?categories=tourism.attraction,beach,natural&limit=20&apiKey=${import.meta.env.VITE_GEOAPIFY_API_KEY}&filter=rect:76.0,8.0,80.3,13.5&text=${encodeURIComponent(searchQuery)}`
       );
+      console.log('Search response:', response.data);
+
       const searchResults = response.data.features.map((feature) => ({
-        id: feature.properties.place_id,
+        id: feature.properties.place_id || feature.properties.datasource?.raw?.place_id || 'unknown',
         name: feature.properties.name || 'Unknown Place',
         description: feature.properties.address_line2 || 'A beautiful destination',
-        coordinates: feature.properties,
+        coordinates: {
+          lon: feature.properties.lon,
+          lat: feature.properties.lat,
+        },
         tags: feature.properties.categories || [],
         address: feature.properties.formatted || 'No address available',
         imageUrl: `https://source.unsplash.com/featured/?${encodeURIComponent(feature.properties.name || 'tourism')},tamilnadu`,
       }));
+
       setPlaces(searchResults);
+      if (searchResults.length === 0) {
+        setError(`No places found for "${searchQuery}". Try terms like "Meenakshi Temple" or "Ooty".`);
+      }
     } catch (err) {
-      setError('Search failed.');
-      console.error('Search error:', err);
+      console.error('Search error:', err.response || err.message);
+      if (err.response?.status === 400) {
+        setError(`Invalid search request: ${err.response.data?.message || 'Check search term.'}`);
+      } else {
+        setError('Search failed. Please try again.');
+      }
     }
     setLoading(false);
   };
 
+  // Save place
   const handleSave = async (place) => {
     if (!isAuthenticated) {
       navigate('/login');
@@ -113,8 +149,8 @@ const Home = () => {
       );
       alert('Place saved!');
     } catch (err) {
+      console.error('Save place error:', err.response || err.message);
       alert('Failed to save place.');
-      console.error('Save place error:', err);
     }
   };
 
@@ -128,7 +164,7 @@ const Home = () => {
           <Search className="h-5 w-5 text-gray-500 mr-2" />
           <input
             type="text"
-            placeholder="Search places (e.g., Marina Beach, Chennai)"
+            placeholder="Search places (e.g., Marina Beach, Meenakshi Temple)"
             className="w-full outline-none text-gray-700"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -136,6 +172,7 @@ const Home = () => {
           <button
             type="submit"
             className="ml-2 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700"
+            disabled={loading}
           >
             Search
           </button>
@@ -149,12 +186,13 @@ const Home = () => {
         </div>
       )}
 
+      {/* Loading State */}
+      {loading && <p className="text-gray-600">Loading places...</p>}
+
       {/* Featured Destinations */}
       <section>
         <h2 className="text-2xl font-semibold text-gray-900 mb-4">Featured Destinations</h2>
-        {loading ? (
-          <p>Loading places...</p>
-        ) : (
+        {places.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {places.map((place) => (
               <div key={place.id} className="bg-white rounded-xl shadow-lg overflow-hidden">
@@ -191,6 +229,7 @@ const Home = () => {
                   <button
                     onClick={() => handleSave(place)}
                     className="mt-4 flex items-center text-gray-500 hover:text-blue-600"
+                    disabled={loading}
                   >
                     <Heart className="h-5 w-5 mr-1" />
                     Save
@@ -199,6 +238,12 @@ const Home = () => {
               </div>
             ))}
           </div>
+        ) : (
+          !loading && (
+            <p className="text-gray-500">
+              No places found. Try searching for places like "Meenakshi Temple" or "Ooty".
+            </p>
+          )
         )}
       </section>
     </div>
