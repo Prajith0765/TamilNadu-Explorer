@@ -12,53 +12,81 @@ const Home = () => {
   const [error, setError] = useState('');
   const isAuthenticated = !!localStorage.getItem('token');
 
+  // Map Geoapify categories to Pexels query terms
+  const getImageQuery = (placeName, categories) => {
+    if (categories.includes('beach')) return 'beach';
+    if (categories.includes('tourism.attraction') && placeName.toLowerCase().includes('temple')) return 'temple';
+    if (categories.includes('natural') && placeName.toLowerCase().includes('reservoir')) return 'reservoir';
+    if (categories.includes('natural')) return 'nature';
+    return 'tamil nadu';
+  };
+
   // Fetch places on mount or when location changes
   useEffect(() => {
     const fetchPlaces = async (loc = null) => {
       setLoading(true);
       setError('');
       try {
-        // Build Geoapify API URL with valid categories
-        let url = `https://api.geoapify.com/v2/places?categories=tourism.attraction,beach,natural&limit=20&apiKey=${import.meta.env.VITE_GEOAPIFY_API_KEY}`;
+        // Build Geoapify API URL for places
+        let url = `https://api.geoapify.com/v2/places?categories=tourism.attraction,beach,natural&limit=20&apiKey=${import.meta.env.VITE_GEOAPIFY_API_KEY}&lang=en`;
         if (loc) {
-          url += `&filter=circle:${loc.lon},${loc.lat},50000`; // 50km radius
+          url += `&filter=circle:${loc.lon},${loc.lat},50000`;
         } else {
-          // Tamil Nadu bounding box: lonMin,latMin,lonMax,latMax
           url += '&filter=rect:76.0,8.0,80.3,13.5';
         }
         console.log('Fetching places from:', url);
         const response = await axios.get(url);
-        console.log('Geoapify response:', response.data);
+        console.log('Geoapify places response:', response.data);
 
-        const fetchedPlaces = response.data.features.map((feature) => ({
-          id: feature.properties.place_id || feature.properties.datasource?.raw?.place_id || 'unknown',
-          name: feature.properties.name || 'Unknown Place',
-          description: feature.properties.address_line2 || 'A beautiful destination',
-          coordinates: {
-            lon: feature.properties.lon,
-            lat: feature.properties.lat,
-          },
-          tags: feature.properties.categories || [],
-          address: feature.properties.formatted || 'No address available',
-          imageUrl: `https://source.unsplash.com/featured/?${encodeURIComponent(feature.properties.name || 'tourism')},tamilnadu`,
-        }));
+        const fetchedPlaces = await Promise.all(
+          response.data.features.map(async (feature) => {
+            let imageUrl = 'https://via.placeholder.com/400x200?text=Tamil+Nadu';
+            try {
+              const query = getImageQuery(feature.properties.name || 'tamil nadu', feature.properties.categories || []);
+              console.log(`Pexels query for ${feature.properties.name}: ${query}`);
+              const pexelsResponse = await axios.get(
+                `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=1`,
+                {
+                  headers: {
+                    Authorization: import.meta.env.VITE_PEXELS_API_KEY,
+                  },
+                }
+              );
+              if (pexelsResponse.data.photos.length > 0) {
+                imageUrl = pexelsResponse.data.photos[0].src.medium;
+              }
+              console.log(`Image for ${feature.properties.name}: ${imageUrl}`);
+            } catch (imgErr) {
+              console.error(`Image fetch error for ${feature.properties.name}:`, imgErr.message);
+            }
+
+            return {
+              id: feature.properties.place_id || feature.properties.datasource?.raw?.place_id || 'unknown',
+              name: feature.properties.name || 'Unknown Place',
+              description: feature.properties.address_line2 || 'A beautiful destination',
+              coordinates: {
+                lon: feature.properties.lon,
+                lat: feature.properties.lat,
+              },
+              tags: feature.properties.categories || [],
+              address: feature.properties.formatted || 'No address available',
+              imageUrl,
+            };
+          })
+        );
 
         setPlaces(fetchedPlaces);
         if (fetchedPlaces.length === 0) {
-          setError('No places found in this area. Try searching for a specific place like "Marina Beach".');
+          setError('No places found in this area. Try searching for "Marina Beach" or "Chennai".');
         }
       } catch (err) {
         console.error('Fetch places error:', err.response || err.message);
-        if (err.response?.status === 400) {
-          setError(`Invalid API request: ${err.response.data?.message || 'Check query parameters.'}`);
-        } else {
-          setError('Failed to fetch places. Please check your API key or network.');
-        }
+        setError(`Failed to fetch places: ${err.response?.data?.message || 'Please check your API key or network.'}`);
       }
       setLoading(false);
     };
 
-    // Try geolocation, fallback to Tamil Nadu if it fails
+    // Try geolocation, fallback to Tamil Nadu
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
@@ -71,13 +99,13 @@ const Home = () => {
         },
         () => {
           console.log('Geolocation failed, using Tamil Nadu default');
-          fetchPlaces(); // Tamil Nadu-wide
+          fetchPlaces();
         },
         { timeout: 5000 }
       );
     } else {
       console.log('Geolocation not supported, using Tamil Nadu default');
-      fetchPlaces(); // Tamil Nadu-wide
+      fetchPlaces();
     }
   }, []);
 
@@ -91,36 +119,111 @@ const Home = () => {
     setLoading(true);
     setError('');
     try {
-      // Search across Tamil Nadu with valid categories
-      const response = await axios.get(
-        `https://api.geoapify.com/v2/places?categories=tourism.attraction,beach,natural&limit=20&apiKey=${import.meta.env.VITE_GEOAPIFY_API_KEY}&filter=rect:76.0,8.0,80.3,13.5&text=${encodeURIComponent(searchQuery)}`
-      );
-      console.log('Search response:', response.data);
+      // Step 1: Geocode the search query to get coordinates
+      let url = `https://api.geoapify.com/v1/geocode/search?text=${encodeURIComponent(searchQuery)}&filter=rect:76.0,8.0,80.3,13.5&limit=1&apiKey=${import.meta.env.VITE_GEOAPIFY_API_KEY}&lang=en`;
+      console.log('Geocoding search from:', url);
+      let response = await axios.get(url);
+      console.log('Geocoding response:', response.data);
 
-      const searchResults = response.data.features.map((feature) => ({
-        id: feature.properties.place_id || feature.properties.datasource?.raw?.place_id || 'unknown',
-        name: feature.properties.name || 'Unknown Place',
-        description: feature.properties.address_line2 || 'A beautiful destination',
-        coordinates: {
-          lon: feature.properties.lon,
-          lat: feature.properties.lat,
-        },
-        tags: feature.properties.categories || [],
-        address: feature.properties.formatted || 'No address available',
-        imageUrl: `https://source.unsplash.com/featured/?${encodeURIComponent(feature.properties.name || 'tourism')},tamilnadu`,
-      }));
+      let searchResults = [];
+      if (response.data.features.length > 0) {
+        // Step 2: Use coordinates to fetch nearby places
+        const { lon, lat } = response.data.features[0].properties;
+        url = `https://api.geoapify.com/v2/places?categories=tourism.attraction,beach,natural&limit=20&apiKey=${import.meta.env.VITE_GEOAPIFY_API_KEY}&filter=circle:${lon},${lat},50000&lang=en`;
+        console.log('Fetching nearby places from:', url);
+        response = await axios.get(url);
+        console.log('Nearby places response:', response.data);
+
+        searchResults = await Promise.all(
+          response.data.features.map(async (feature) => {
+            let imageUrl = 'https://via.placeholder.com/400x200?text=Tamil+Nadu';
+            try {
+              const query = getImageQuery(feature.properties.name || searchQuery, feature.properties.categories || []);
+              console.log(`Pexels query for ${feature.properties.name}: ${query}`);
+              const pexelsResponse = await axios.get(
+                `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=1`,
+                {
+                  headers: {
+                    Authorization: import.meta.env.VITE_PEXELS_API_KEY,
+                  },
+                }
+              );
+              if (pexelsResponse.data.photos.length > 0) {
+                imageUrl = pexelsResponse.data.photos[0].src.medium;
+              }
+              console.log(`Image for ${feature.properties.name}: ${imageUrl}`);
+            } catch (imgErr) {
+              console.error(`Image fetch error for ${feature.properties.name}:`, imgErr.message);
+            }
+
+            return {
+              id: feature.properties.place_id || feature.properties.datasource?.raw?.place_id || 'unknown',
+              name: feature.properties.name || searchQuery,
+              description: feature.properties.address_line2 || 'A beautiful destination',
+              coordinates: {
+                lon: feature.properties.lon,
+                lat: feature.properties.lat,
+              },
+              tags: feature.properties.categories || ['tourism'],
+              address: feature.properties.formatted || 'No address available',
+              imageUrl,
+            };
+          })
+        );
+      }
+
+      // Fallback to text-based places search if geocoding fails or no nearby places
+      if (searchResults.length === 0) {
+        url = `https://api.geoapify.com/v2/places?categories=tourism.attraction,beach,natural&limit=20&apiKey=${import.meta.env.VITE_GEOAPIFY_API_KEY}&filter=rect:76.0,8.0,80.3,13.5&lang=en&text=${encodeURIComponent(searchQuery)}`;
+        console.log('Fallback search from:', url);
+        response = await axios.get(url);
+        console.log('Fallback places response:', response.data);
+
+        searchResults = await Promise.all(
+          response.data.features.map(async (feature) => {
+            let imageUrl = 'https://via.placeholder.com/400x200?text=Tamil+Nadu';
+            try {
+              const query = getImageQuery(feature.properties.name || searchQuery, feature.properties.categories || []);
+              console.log(`Pexels query for ${feature.properties.name}: ${query}`);
+              const pexelsResponse = await axios.get(
+                `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=1`,
+                {
+                  headers: {
+                    Authorization: import.meta.env.VITE_PEXELS_API_KEY,
+                  },
+                }
+              );
+              if (pexelsResponse.data.photos.length > 0) {
+                imageUrl = pexelsResponse.data.photos[0].src.medium;
+              }
+              console.log(`Image for ${feature.properties.name}: ${imageUrl}`);
+            } catch (imgErr) {
+              console.error(`Image fetch error for ${feature.properties.name}:`, imgErr.message);
+            }
+
+            return {
+              id: feature.properties.place_id || feature.properties.datasource?.raw?.place_id || 'unknown',
+              name: feature.properties.name || searchQuery,
+              description: feature.properties.address_line2 || 'A beautiful destination',
+              coordinates: {
+                lon: feature.properties.lon,
+                lat: feature.properties.lat,
+              },
+              tags: feature.properties.categories || ['tourism'],
+              address: feature.properties.formatted || 'No address available',
+              imageUrl,
+            };
+          })
+        );
+      }
 
       setPlaces(searchResults);
       if (searchResults.length === 0) {
-        setError(`No places found for "${searchQuery}". Try terms like "Meenakshi Temple" or "Ooty".`);
+        setError(`No places found for "${searchQuery}". Try terms like "Chennai" or "Ooty".`);
       }
     } catch (err) {
       console.error('Search error:', err.response || err.message);
-      if (err.response?.status === 400) {
-        setError(`Invalid search request: ${err.response.data?.message || 'Check search term.'}`);
-      } else {
-        setError('Search failed. Please try again.');
-      }
+      setError(`Search failed: ${err.response?.data?.message || 'Please try again.'}`);
     }
     setLoading(false);
   };
@@ -164,7 +267,7 @@ const Home = () => {
           <Search className="h-5 w-5 text-gray-500 mr-2" />
           <input
             type="text"
-            placeholder="Search places (e.g., Marina Beach, Meenakshi Temple)"
+            placeholder="Search places (e.g., Chennai, Meenakshi Temple)"
             className="w-full outline-none text-gray-700"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -201,7 +304,8 @@ const Home = () => {
                   alt={place.name}
                   className="w-full h-48 object-cover"
                   onError={(e) => {
-                    e.target.src = 'https://source.unsplash.com/featured/?tourism';
+                    e.target.src = 'https://via.placeholder.com/400x200?text=Tamil+Nadu';
+                    console.log(`Image failed for ${place.name}, using fallback`);
                   }}
                 />
                 <div className="p-4">
@@ -241,7 +345,7 @@ const Home = () => {
         ) : (
           !loading && (
             <p className="text-gray-500">
-              No places found. Try searching for places like "Meenakshi Temple" or "Ooty".
+              No places found. Try searching for places like "Chennai" or "Ooty".
             </p>
           )
         )}
