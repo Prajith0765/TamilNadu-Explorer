@@ -8,6 +8,7 @@ import Interests from './pages/Interests';
 import Account from './pages/Account';
 import EditProfile from './pages/EditProfile';
 import PlaceDetails from './pages/PlaceDetails';
+import ChatbotPopup from './components/ChatbotPopup';
 
 const App = () => {
   return (
@@ -25,6 +26,7 @@ const App = () => {
             <Route path="/place/:id" element={<PlaceDetails />} />
           </Routes>
         </main>
+        <ChatbotPopup />
       </div>
     </Router>
   );

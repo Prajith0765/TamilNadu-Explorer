@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const authRoutes = require('./routes/auth');
 const placesRoutes = require('./routes/places');
+const chatbotRoutes = require('./routes/chatbot');
 require('dotenv').config(); // Load .env file
 
 const app = express();
@@ -22,6 +23,7 @@ mongoose.connect(process.env.MONGO_URI, {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/places', placesRoutes);
+app.use('/api/chatbot', chatbotRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
