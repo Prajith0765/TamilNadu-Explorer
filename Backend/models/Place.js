@@ -12,6 +12,22 @@ const placeSchema = new mongoose.Schema({
   imageUrl: { type: String },
   source: { type: String, default: 'api' },
   externalId: { type: String },
+  category: { 
+    type: String, 
+    enum: [
+      'temple', 
+      'beach', 
+      'hill station', 
+      'historical', 
+      'festival', 
+      'wildlife',
+      'waterfall',
+      'museum',
+      'village',
+      'other'
+    ], 
+    default: 'other' 
+  }, // Add category field
 }, { timestamps: true });
 
 module.exports = mongoose.model('Place', placeSchema);
