@@ -5,15 +5,16 @@ const Place = require('../models/Place');
 const User = require('../models/User');
 const { protect } = require('../middleware/authMiddleware');
 
-// In-memory cache for Pexels images
+// In-memory cache for images and tracking used image URLs
 const imageCache = new Map();
+const usedImageUrls = new Set();
 
-// Mapping categories to Overpass API queries (replaced hill station and historical)
+// Mapping categories to Overpass API queries
 const categoryToOverpassQuery = {
   temple: '[amenity=place_of_worship]',
   beach: '[natural=beach]',
-  peak: '[natural=peak]', // Replaced "hill station"
-  castle: '[historic=castle]', // Replaced "historical"
+  peak: '[natural=peak]',
+  castle: '[historic=castle]',
   park: '[leisure~"(park|garden)"],[landuse=recreation_ground]',
   wildlife: '[tourism=zoo],[landuse=nature_reserve],[natural=wildlife]',
   waterfall: '[waterway=waterfall]',
@@ -25,9 +26,9 @@ const categoryToOverpassQuery = {
 const tagMap = {
   'amenity.place_of_worship': 'Culture',
   'natural.beach': 'Relaxation',
-  'natural.peak': 'Nature', // Updated for "peak"
+  'natural.peak': 'Nature',
   'tourism.attraction': 'Adventure',
-  'historic.castle': 'History', // Updated for "castle"
+  'historic.castle': 'History',
   'tourism.museum': 'History',
   'tourism.zoo': 'Wildlife',
   'landuse.nature_reserve': 'Wildlife',
@@ -39,35 +40,59 @@ const tagMap = {
   'landuse.recreation_ground': 'Recreation',
 };
 
-// Function to fetch image from Pexels with caching
-const fetchImageFromPexels = async (query) => {
-  if (imageCache.has(query)) {
-    return imageCache.get(query);
-  }
-
-  if (!process.env.PEXELS_API_KEY) {
-    console.error('Pexels API key is missing in environment variables');
-    return null;
-  }
-
+// Function to fetch image from Google Places API
+const fetchImageFromGooglePlaces = async (placeName, category, lat, lon) => {
   try {
-    const response = await axios.get('https://api.pexels.com/v1/search', {
-      headers: {
-        Authorization: process.env.PEXELS_API_KEY,
-      },
-      params: {
-        query: `${query} Tamil Nadu`,
-        per_page: 1,
-      },
-    });
-    const imageUrl = response.data.photos[0]?.src?.medium || null;
-    imageCache.set(query, imageUrl);
-    return imageUrl;
+    if (!process.env.GOOGLE_PLACES_API_KEY) {
+      console.error('Google Places API key is missing in environment variables');
+      return null;
+    }
+
+    // Step 1: Find the place using the name and coordinates
+    const findPlaceUrl = 'https://maps.googleapis.com/maps/api/place/findplacefromtext/json';
+    const findPlaceParams = {
+      input: `${placeName} ${category} Tamil Nadu`,
+      inputtype: 'textquery',
+      fields: 'place_id,photos',
+      locationbias: `point:${lat},${lon}`,
+      key: process.env.GOOGLE_PLACES_API_KEY,
+    };
+
+    const findPlaceResponse = await axios.get(findPlaceUrl, { params: findPlaceParams });
+    const candidate = findPlaceResponse.data.candidates?.[0];
+    if (!candidate || !candidate.photos || candidate.photos.length === 0) {
+      console.log(`No photos found for ${placeName} via Google Places API`);
+      return null;
+    }
+
+    // Step 2: Fetch the first photo
+    const photoReference = candidate.photos[0].photo_reference;
+    const photoUrl = `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference=${photoReference}&key=${process.env.GOOGLE_PLACES_API_KEY}`;
+
+    if (photoUrl && !usedImageUrls.has(photoUrl)) {
+      usedImageUrls.add(photoUrl);
+      return photoUrl;
+    }
+    return null;
   } catch (error) {
-    console.error(`Failed to fetch Pexels image for ${query}:`, error.response?.status || error.message);
-    imageCache.set(query, null);
+    console.error(`Failed to fetch Google Places image for ${placeName}:`, error.response?.status || error.message);
     return null;
   }
+};
+
+// Function to fetch a relevant image for a place
+const fetchPlaceImage = async (placeName, category, lat, lon) => {
+  // Use Google Places API to fetch the image
+  let imageUrl = await fetchImageFromGooglePlaces(placeName, category, lat, lon);
+  if (imageUrl) {
+    console.log(`Google Places image found for ${placeName}: ${imageUrl}`);
+    return imageUrl;
+  }
+
+  // Fallback to a generic placeholder if Google Places fails
+  const placeholder = `https://via.placeholder.com/400x300?text=${encodeURIComponent(placeName)}`;
+  console.log(`Using placeholder for ${placeName}: ${placeholder}`);
+  return placeholder;
 };
 
 // Save a place
@@ -184,8 +209,7 @@ router.get('/', async (req, res) => {
 
       const placesWithImages = await Promise.all(
         places.map(async (place) => {
-          const imageUrl = await fetchImageFromPexels(place.name) ||
-            `https://source.unsplash.com/featured/?${encodeURIComponent(place.name)},tamilnadu`;
+          const imageUrl = await fetchPlaceImage(place.name, place.category, place.coordinates.lat, place.coordinates.lon);
           return { ...place, imageUrl };
         })
       );
@@ -276,8 +300,7 @@ router.get('/', async (req, res) => {
 
     const placesWithImages = await Promise.all(
       places.map(async (place) => {
-        const imageUrl = await fetchImageFromPexels(place.name) ||
-          `https://source.unsplash.com/featured/?${encodeURIComponent(place.name)},tamilnadu`;
+        const imageUrl = await fetchPlaceImage(place.name, place.category, place.coordinates.lat, place.coordinates.lon);
         return { ...place, imageUrl };
       })
     );
